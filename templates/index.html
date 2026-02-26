@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="de" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smarte Einkaufsliste</title>
+    <!-- Tailwind CSS für responsives Design inkl. Dark Mode -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class', // Aktiviert klassenbasierten Dark Mode
+        }
+        // Dark Mode Präferenz aus LocalStorage laden
+        if (localStorage.getItem('theme') === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+    </script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- ZXing Barcode Scanner Bibliothek -->
+    <script type="text/javascript" src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
+    <style>
+        body { overflow-x: hidden; }
+        .line-through { text-decoration-color: #ef4444; text-decoration-thickness: 2px; }
+        #reader-video { object-fit: cover; width: 100%; max-height: 300px; border-radius: 0.5rem; background-color: #000; }
+        .scan-target {
+            position: absolute;
+            top: 50%;
+            left: 10%;
+            right: 10%;
+            height: 2px;
+            background-color: rgba(34, 197, 94, 0.8);
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+            transform: translateY(-50%);
+            z-index: 10;
+            pointer-events: none;
+        }
+        
+        /* Versteckt den Standard-Pfeil des Dropdowns in allen Browsern */
+        select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 min-h-screen font-sans text-gray-800 dark:text-gray-100 transition-colors duration-200">
+
+    <div class="max-w-3xl mx-auto p-4 sm:p-6 md:p-8">
+        
+        <!-- Top Bar: Titel & Theme Toggle -->
+        <header class="flex items-center justify-between mb-6">
+            <h1 class="text-3xl font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-2">
+                <i data-lucide="shopping-cart" class="w-8 h-8"></i> Einkaufsliste
+            </h1>
+            <button id="theme-toggle" class="p-3 rounded-xl bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 shadow-sm hover:shadow-md transition border border-gray-200 dark:border-gray-700">
+                <i id="theme-icon-light" data-lucide="moon" class="hidden dark:block w-6 h-6"></i>
+                <i id="theme-icon-dark" data-lucide="sun" class="block dark:hidden w-6 h-6"></i>
+            </button>
+        </header>
+
+        <!-- Fancy Listen-Management & Sync -->
+        <div class="flex flex-wrap items-center gap-3 mb-8 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-md border border-gray-200 dark:border-gray-700">
+            <div class="relative flex-1 min-w-[200px] group">
+                <!-- Dropdown mit expliziten Dark-Mode Farben -->
+                <select id="list-selector" class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white text-lg sm:text-xl font-bold rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 block p-3 sm:p-4 pr-12 cursor-pointer shadow-sm transition-all hover:border-indigo-300 dark:hover:border-indigo-500">
+                    <!-- Listen werden hier geladen -->
+                </select>
+                <!-- Custom Arrow Icon -->
+                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-indigo-500 dark:text-indigo-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
+                    <i data-lucide="chevron-down" class="w-6 h-6"></i>
+                </div>
+            </div>
+            
+            <div class="flex gap-2">
+                <button id="reload-btn" class="text-blue-600 bg-blue-50 hover:bg-blue-100 dark:text-blue-400 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 p-3 sm:p-4 rounded-xl shadow-sm hover:shadow-md transition flex-shrink-0" title="Liste aktualisieren (Synchronisieren)">
+                    <i data-lucide="refresh-cw" class="w-6 h-6"></i>
+                </button>
+                <button id="add-list-btn" class="text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 p-3 sm:p-4 rounded-xl shadow-sm hover:shadow-md transition flex-shrink-0" title="Neue Liste erstellen">
+                    <i data-lucide="plus" class="w-6 h-6"></i>
+                </button>
+                <button id="delete-list-btn" class="text-red-600 bg-red-50 hover:bg-red-100 dark:text-white dark:bg-red-600 dark:hover:bg-red-700 p-3 sm:p-4 rounded-xl shadow-sm hover:shadow-md transition border border-red-100 dark:border-transparent flex-shrink-0" title="Aktuelle Liste löschen">
+                    <i data-lucide="trash-2" class="w-6 h-6"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Eingabebereich -->
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-md p-4 mb-6 border border-gray-200 dark:border-gray-700">
+            <form id="add-form" class="flex flex-col sm:flex-row gap-3">
+                <div class="flex gap-2 flex-1">
+                    <input type="number" id="item-quantity" value="1" min="1" title="Menge"
+                           class="w-16 sm:w-20 px-3 py-3 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-center text-indigo-700 dark:text-indigo-300 transition">
+                    
+                    <input type="text" id="item-input" placeholder="Produkt eingeben..." 
+                           class="flex-1 w-full px-4 py-3 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition">
+                </div>
+                
+                <div class="flex gap-2 w-full sm:w-auto">
+                    <button type="submit" class="flex-1 sm:flex-none bg-indigo-600 text-white px-5 py-3 rounded-xl hover:bg-indigo-700 transition font-semibold flex items-center justify-center gap-2 shadow-sm">
+                        <i data-lucide="plus" class="w-5 h-5"></i> <span>Hinzufügen</span>
+                    </button>
+                    <button type="button" id="scan-btn" class="flex-1 sm:flex-none bg-emerald-500 text-white px-5 py-3 rounded-xl hover:bg-emerald-600 transition font-semibold flex items-center justify-center gap-2 shadow-sm">
+                        <i data-lucide="barcode" class="w-5 h-5"></i> <span>Scannen</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Scanner Container -->
+        <div id="scanner-container" class="hidden bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-4 mb-8 relative border border-gray-200 dark:border-gray-700">
+            <button id="close-scanner" class="absolute top-2 right-2 text-gray-500 hover:text-red-500 z-20 bg-white dark:bg-gray-800 rounded-full p-2 shadow-md">
+                <i data-lucide="x"></i>
+            </button>
+            <div class="relative w-full overflow-hidden rounded-xl border-2 border-emerald-500/30">
+                <video id="reader-video"></video>
+                <div class="scan-target"></div>
+            </div>
+            <p id="scanner-status" class="text-center text-sm text-gray-500 dark:text-gray-400 mt-4 font-medium bg-gray-50 dark:bg-gray-900 p-2 rounded-lg">Kamera wird gestartet...</p>
+        </div>
+
+        <!-- Ladeindikator -->
+        <div id="loading" class="hidden text-center py-6 text-indigo-500 dark:text-indigo-400 font-bold flex justify-center items-center gap-2 bg-white dark:bg-gray-800 rounded-2xl shadow-md border border-gray-200 dark:border-gray-700 mb-8">
+            <i data-lucide="loader-2" class="animate-spin w-6 h-6"></i> Bitte warten...
+        </div>
+
+        <!-- Listen Header mit "Alle abhaken" -->
+        <div class="flex justify-between items-end mb-3 px-2">
+            <h3 class="text-lg font-bold text-gray-700 dark:text-gray-300">Deine Produkte</h3>
+            <button id="check-all-btn" class="text-sm font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 px-3 py-1.5 rounded-lg">
+                <i data-lucide="check-check" class="w-4 h-4"></i> Alle abhaken
+            </button>
+        </div>
+
+        <!-- Einkaufsliste -->
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-md overflow-hidden border border-gray-200 dark:border-gray-700 mb-10">
+            <ul id="shopping-list" class="divide-y divide-gray-100 dark:divide-gray-700/50">
+                <!-- Items werden hier per JS eingefügt -->
+            </ul>
+        </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div id="edit-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+            <div class="p-5 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900">
+                <h3 class="text-xl font-bold text-gray-800 dark:text-white">Eintrag bearbeiten</h3>
+                <button id="close-edit-modal" class="text-gray-400 hover:text-gray-800 dark:hover:text-white bg-gray-200 dark:bg-gray-800 p-1.5 rounded-full transition"><i data-lucide="x"></i></button>
+            </div>
+            <form id="edit-form" class="p-6">
+                <input type="hidden" id="edit-id">
+                <div class="mb-5">
+                    <label class="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2">Name des Produkts</label>
+                    <input type="text" id="edit-name" class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="mb-8">
+                    <label class="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2">Menge</label>
+                    <input type="number" id="edit-menge" min="1" class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <button type="submit" class="w-full bg-indigo-600 text-white px-4 py-3 rounded-xl hover:bg-indigo-700 transition font-bold text-lg shadow-md">Änderungen speichern</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Info Modal -->
+    <div id="info-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+            <div class="p-5 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900">
+                <h3 id="modal-title" class="text-xl font-bold text-gray-800 dark:text-white line-clamp-1">Produkt Info</h3>
+                <button id="close-modal" class="text-gray-400 hover:text-gray-800 dark:hover:text-white bg-gray-200 dark:bg-gray-800 p-1.5 rounded-full transition"><i data-lucide="x"></i></button>
+            </div>
+            <div class="p-6 overflow-y-auto max-h-[75vh]">
+                <div class="flex justify-center mb-6 h-48 bg-gray-50 dark:bg-gray-900 rounded-xl overflow-hidden relative border border-gray-100 dark:border-gray-700">
+                    <img id="modal-img" src="" alt="Produktbild" class="object-contain h-full w-full hidden p-2">
+                    <div id="modal-no-img" class="flex items-center justify-center w-full h-full text-gray-400 flex-col gap-2">
+                        <i data-lucide="image-off" class="w-8 h-8 opacity-50"></i>
+                        <span class="text-sm font-medium">Kein Bild verfügbar</span>
+                    </div>
+                </div>
+                
+                <!-- Hersteller und Marke Info-Box -->
+                <div id="modal-company-info" class="mb-5 p-4 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-sm hidden border border-indigo-100 dark:border-indigo-500/20">
+                    <h4 class="font-bold text-indigo-800 dark:text-indigo-300 mb-2 flex items-center gap-2"><i data-lucide="building-2" class="w-4 h-4"></i> Hersteller & Marke</h4>
+                    <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-gray-700 dark:text-gray-300">
+                        <span class="font-medium text-indigo-600/70 dark:text-indigo-400/70">Marke:</span> <span id="modal-brand" class="font-semibold">-</span>
+                        <span class="font-medium text-indigo-600/70 dark:text-indigo-400/70">Firma:</span> <span id="modal-manufacturer" class="font-semibold">-</span>
+                    </div>
+                </div>
+                
+                <h4 class="font-bold text-gray-800 dark:text-white mb-3 flex items-center gap-2 bg-gray-100 dark:bg-gray-700/50 p-2 rounded-lg"><i data-lucide="activity" class="w-4 h-4"></i> Nährwerte (pro 100g)</h4>
+                <div class="grid grid-cols-2 gap-y-3 gap-x-4 text-sm text-gray-800 dark:text-gray-300 px-2">
+                    <div class="text-gray-500 dark:text-gray-400 font-medium">Energie:</div><div id="nut-energy" class="font-bold text-right text-indigo-600 dark:text-indigo-400"></div>
+                    <div class="text-gray-500 dark:text-gray-400 font-medium">Fett:</div><div id="nut-fat" class="font-semibold text-right"></div>
+                    <div class="text-gray-500 dark:text-gray-400 font-medium">Kohlenhydrate:</div><div id="nut-carbs" class="font-semibold text-right"></div>
+                    <div class="text-gray-500 dark:text-gray-400 text-xs pl-2">- davon Zucker:</div><div id="nut-sugar" class="font-semibold text-right"></div>
+                    <div class="text-gray-500 dark:text-gray-400 font-medium">Eiweiß:</div><div id="nut-protein" class="font-semibold text-right"></div>
+                    <div class="text-gray-500 dark:text-gray-400 font-medium">Salz:</div><div id="nut-salt" class="font-semibold text-right"></div>
+                </div>
+
+                <details id="modal-ingredients-container" class="mt-6 group hidden">
+                    <summary class="font-bold text-gray-800 dark:text-white cursor-pointer outline-none hover:text-indigo-600 dark:hover:text-indigo-400 transition flex items-center justify-between bg-gray-100 dark:bg-gray-700/50 p-3 rounded-lg">
+                        <span class="flex items-center gap-2"><i data-lucide="list" class="w-4 h-4"></i> Zutaten anzeigen</span>
+                        <i data-lucide="chevron-down" class="w-4 h-4 transition-transform group-open:rotate-180"></i>
+                    </summary>
+                    <p id="modal-ingredients-text" class="text-sm text-gray-600 dark:text-gray-400 mt-2 bg-gray-50 dark:bg-gray-900 p-4 rounded-xl leading-relaxed border border-gray-100 dark:border-gray-700"></p>
+                </details>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+
+        // Theme Toggle Logic
+        const themeToggleBtn = document.getElementById('theme-toggle');
+        themeToggleBtn.addEventListener('click', () => {
+            document.documentElement.classList.toggle('dark');
+            if (document.documentElement.classList.contains('dark')) {
+                localStorage.setItem('theme', 'dark');
+            } else {
+                localStorage.setItem('theme', 'light');
+            }
+        });
+
+        const API_URL = '/api';
+        let currentLists = [];
+        let currentListId = 1;
+        let currentItems = [];
+        let codeReader = null;
+        
+        try { codeReader = new ZXing.BrowserMultiFormatReader(); } 
+        catch (e) { console.error("Konnte Barcode-Scanner nicht laden:", e); }
+
+        const listSelector = document.getElementById('list-selector');
+        const listEl = document.getElementById('shopping-list');
+        const addForm = document.getElementById('add-form');
+        const itemInput = document.getElementById('item-input');
+        const itemQuantity = document.getElementById('item-quantity');
+        const scanBtn = document.getElementById('scan-btn');
+        const scannerContainer = document.getElementById('scanner-container');
+        const closeScannerBtn = document.getElementById('close-scanner');
+        const scannerStatus = document.getElementById('scanner-status');
+        const loadingEl = document.getElementById('loading');
+        
+        const modal = document.getElementById('info-modal');
+        const closeModalBtn = document.getElementById('close-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalImg = document.getElementById('modal-img');
+        const modalNoImg = document.getElementById('modal-no-img');
+
+        const editModal = document.getElementById('edit-modal');
+        const closeEditModalBtn = document.getElementById('close-edit-modal');
+        const editForm = document.getElementById('edit-form');
+        const editIdInput = document.getElementById('edit-id');
+        const editNameInput = document.getElementById('edit-name');
+        const editMengeInput = document.getElementById('edit-menge');
+
+        // --- LISTEN LOGIK ---
+        async function loadAllLists() {
+            try {
+                // Mit cache: 'no-store' erzwingen wir, dass der Browser frische Daten holt!
+                const res = await fetch(`${API_URL}/lists`, { cache: 'no-store' });
+                currentLists = await res.json();
+                
+                listSelector.innerHTML = '';
+                if(currentLists.length === 0) return;
+
+                currentLists.forEach(list => {
+                    const opt = document.createElement('option');
+                    opt.value = list.id;
+                    opt.innerText = list.name;
+                    opt.className = "bg-white dark:bg-gray-800 text-gray-900 dark:text-white py-2"; 
+                    listSelector.appendChild(opt);
+                });
+
+                if(!currentLists.find(l => l.id == currentListId)) {
+                    currentListId = currentLists[0].id;
+                }
+                listSelector.value = currentListId;
+                
+                loadList();
+            } catch (err) {
+                console.error("Fehler beim Laden der Listen", err);
+            }
+        }
+
+        listSelector.addEventListener('change', (e) => {
+            currentListId = parseInt(e.target.value);
+            loadList();
+        });
+
+        document.getElementById('add-list-btn').addEventListener('click', async () => {
+            const listName = prompt("Name der neuen Liste:");
+            if(!listName || !listName.trim()) return;
+            
+            await fetch(`${API_URL}/lists`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: listName.trim() })
+            });
+            loadAllLists();
+        });
+
+        document.getElementById('delete-list-btn').addEventListener('click', async () => {
+            if(currentLists.length <= 1) {
+                alert("Du kannst die letzte verbleibende Liste nicht löschen.");
+                return;
+            }
+            const confirmDelete = confirm("Möchtest du diese Liste und alle enthaltenen Produkte wirklich endgültig löschen?");
+            if(!confirmDelete) return;
+
+            await fetch(`${API_URL}/lists/${currentListId}`, { method: 'DELETE' });
+            currentListId = 0; 
+            loadAllLists();
+        });
+
+        // --- MANUELLER RELOAD & CHECK ALL ---
+        document.getElementById('reload-btn').addEventListener('click', async () => {
+            // Icon drehen lassen
+            let icon = document.querySelector('#reload-btn svg') || document.querySelector('#reload-btn i');
+            if (icon) icon.classList.add('animate-spin');
+            
+            // Liste laden abwarten
+            await loadList(); 
+            
+            // Icon neu abfragen, da lucide.createIcons() es möglicherweise im DOM neu gezeichnet hat
+            setTimeout(() => {
+                let currentIcon = document.querySelector('#reload-btn svg') || document.querySelector('#reload-btn i');
+                if (currentIcon) currentIcon.classList.remove('animate-spin');
+            }, 300);
+        });
+
+        document.getElementById('check-all-btn').addEventListener('click', async () => {
+            const uncompleted = currentItems.filter(i => !i.erledigt);
+            if (uncompleted.length === 0) {
+                alert("Alle Produkte in dieser Liste sind bereits abgehakt!");
+                return;
+            }
+            if (!confirm("Möchtest du wirklich alle Produkte als erledigt markieren?")) return;
+
+            uncompleted.forEach(item => item.erledigt = true);
+            renderList();
+
+            await Promise.all(uncompleted.map(item => 
+                fetch(`${API_URL}/item/${item.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ erledigt: true })
+                })
+            ));
+            loadList();
+        });
+
+        // --- PRODUKTE LOGIK ---
+        async function loadList() {
+            if(!currentListId) return;
+            try {
+                const res = await fetch(`${API_URL}/list/${currentListId}`, { cache: 'no-store' });
+                currentItems = await res.json();
+                renderList();
+            } catch (err) {
+                console.error("Backend nicht erreichbar", err);
+                listEl.innerHTML = '<li class="p-6 text-red-500 text-center bg-red-50 dark:bg-red-900/20 rounded-xl m-4 font-medium">Fehler beim Laden der Liste. Läuft das Backend?</li>';
+            }
+        }
+
+        function renderList() {
+            listEl.innerHTML = '';
+            if (currentItems.length === 0) {
+                listEl.innerHTML = '<li class="p-8 text-center text-gray-500 dark:text-gray-400 flex flex-col items-center gap-3"><i data-lucide="shopping-bag" class="w-12 h-12 text-gray-300 dark:text-gray-600"></i><span class="font-medium text-lg">Diese Liste ist leer.</span></li>';
+                lucide.createIcons();
+                return;
+            }
+
+            const reversedItems = [...currentItems].reverse();
+
+            reversedItems.forEach(item => {
+                const li = document.createElement('li');
+                li.className = `p-4 sm:p-5 flex items-center justify-between gap-3 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors duration-200 ${item.erledigt ? 'opacity-60 bg-gray-50/50 dark:bg-gray-800/50' : ''}`;
+                
+                let infoBtnHTML = '';
+                if (item.is_food || item.image_url || item.brand || item.manufacturer || item.ingredients) {
+                    infoBtnHTML = `
+                        <button onclick="showInfo(${item.id})" class="text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 p-2.5 rounded-xl transition-colors" title="Info anzeigen">
+                            <i data-lucide="info" class="w-5 h-5"></i>
+                        </button>`;
+                }
+
+                const menge = item.menge || 1;
+                const escapedName = item.name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
+                li.innerHTML = `
+                    <div class="flex items-center gap-4 flex-1 overflow-hidden">
+                        <div class="relative flex items-center justify-center">
+                            <input type="checkbox" ${item.erledigt ? 'checked' : ''} onchange="toggleItem(${item.id}, this.checked)" 
+                                   class="w-7 h-7 text-indigo-600 rounded-lg border-2 border-gray-300 dark:border-gray-600 bg-transparent focus:ring-indigo-500 cursor-pointer flex-shrink-0 transition-all checked:border-indigo-600 dark:checked:border-indigo-500">
+                        </div>
+                        <span class="text-lg sm:text-xl truncate ${item.erledigt ? 'line-through text-gray-400 dark:text-gray-500' : 'text-gray-800 dark:text-gray-100 font-medium'}">
+                            <span class="font-extrabold text-indigo-600 dark:text-indigo-400 mr-2 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-lg text-sm align-middle">${menge}x</span>
+                            <span class="align-middle">${item.name}</span>
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-1.5 sm:gap-2">
+                        ${infoBtnHTML}
+                        <button onclick="openEditModal(${item.id}, '${escapedName}', ${menge})" class="text-amber-500 hover:text-amber-700 bg-amber-50 hover:bg-amber-100 dark:bg-amber-500/10 dark:hover:bg-amber-500/20 p-2.5 rounded-xl transition-colors" title="Bearbeiten">
+                            <i data-lucide="pencil" class="w-5 h-5"></i>
+                        </button>
+                        <button onclick="deleteItem(${item.id})" class="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 dark:bg-red-500/10 dark:hover:bg-red-500/20 p-2.5 rounded-xl transition-colors" title="Löschen">
+                            <i data-lucide="trash-2" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                `;
+                listEl.appendChild(li);
+            });
+            lucide.createIcons();
+        }
+
+        addForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const inputValue = itemInput.value.trim();
+            const mengeValue = parseInt(itemQuantity.value) || 1; 
+            if (!inputValue) return;
+
+            itemInput.value = '';
+            itemQuantity.value = '1'; 
+            itemInput.disabled = true;
+            itemQuantity.disabled = true;
+            loadingEl.classList.remove('hidden');
+            
+            const isBarcode = /^\d{8,14}$/.test(inputValue);
+
+            try {
+                if (isBarcode) {
+                    const res = await fetch(`${API_URL}/scan/${currentListId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ barcode: inputValue, menge: mengeValue })
+                    });
+                    const data = await res.json();
+                    
+                    if (data.is_unknown) {
+                        const customName = prompt(`Das Produkt mit dem Barcode ${inputValue} wurde nicht gefunden.\nWie heißt dieses Produkt? (Wird dauerhaft in deinem System gespeichert)`);
+                        if (customName && customName.trim()) {
+                            await fetch(`${API_URL}/item/${data.id}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ name: customName.trim() })
+                            });
+                        }
+                    }
+                } else {
+                    const existingItem = currentItems.find(i => i.name.toLowerCase() === inputValue.toLowerCase());
+                    if (existingItem) {
+                        const newMenge = (existingItem.menge || 1) + mengeValue;
+                        await fetch(`${API_URL}/item/${existingItem.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ menge: newMenge, erledigt: false })
+                        });
+                    } else {
+                        await fetch(`${API_URL}/list/${currentListId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: inputValue, menge: mengeValue })
+                        });
+                    }
+                }
+            } catch (err) {
+                alert("Fehler beim Verarbeiten der Eingabe.");
+            } finally {
+                itemInput.disabled = false;
+                itemQuantity.disabled = false;
+                itemInput.focus();
+                loadingEl.classList.add('hidden');
+                loadList(); 
+            }
+        });
+
+        // --- BEARBEITEN LOGIK ---
+        function openEditModal(id, name, menge) {
+            editIdInput.value = id;
+            editNameInput.value = name;
+            editMengeInput.value = menge;
+            editModal.classList.remove('hidden');
+            setTimeout(() => editNameInput.focus(), 100);
+        }
+
+        closeEditModalBtn.addEventListener('click', () => editModal.classList.add('hidden'));
+
+        editForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = parseInt(editIdInput.value);
+            const newName = editNameInput.value.trim();
+            const newMenge = parseInt(editMengeInput.value) || 1;
+
+            if (!newName) return;
+
+            const item = currentItems.find(i => i.id === id);
+            if (item) { item.name = newName; item.menge = newMenge; }
+            renderList();
+            editModal.classList.add('hidden');
+
+            await fetch(`${API_URL}/item/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newName, menge: newMenge })
+            });
+            loadList(); 
+        });
+
+        async function toggleItem(id, isChecked) {
+            const item = currentItems.find(i => i.id === id);
+            if (item) item.erledigt = isChecked;
+            renderList(); 
+            
+            await fetch(`${API_URL}/item/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ erledigt: isChecked })
+            });
+            loadList(); 
+        }
+
+        async function deleteItem(id) {
+            if(!confirm("Möchtest du dieses Produkt wirklich löschen?")) return;
+            
+            currentItems = currentItems.filter(i => i.id !== id);
+            renderList();
+            
+            await fetch(`${API_URL}/item/${id}`, { method: 'DELETE' });
+            loadList(); 
+        }
+
+        // --- BARCODE SCANNER ---
+        let scanBuffer = [];
+
+        scanBtn.addEventListener('click', () => {
+            if (!codeReader) {
+                alert("Scanner-Bibliothek wurde noch nicht geladen. Bitte Seite aktualisieren.");
+                return;
+            }
+            
+            scannerContainer.classList.remove('hidden');
+            scannerStatus.innerText = "Kamera wird gestartet...";
+            scanBuffer = []; 
+            
+            codeReader.decodeFromVideoDevice(undefined, 'reader-video', (result, err) => {
+                if (result) {
+                    const text = result.getText().trim();
+                    const isValidBarcode = /^\d{8,14}$/.test(text);
+                    
+                    if (!isValidBarcode) return; 
+                    
+                    scanBuffer.push(text);
+                    
+                    if (scanBuffer.length > 5) scanBuffer.shift();
+                    
+                    const count = scanBuffer.filter(t => t === text).length;
+                    
+                    if (count >= 3) {
+                        scanBuffer = []; 
+                        onScanSuccess(text);
+                    } else {
+                        scannerStatus.innerText = "Erfasse Barcode, bitte ruhig halten...";
+                    }
+                }
+            }).then(() => {
+                scannerStatus.innerText = "Halte den Strichcode auf die grüne Linie.";
+            }).catch((err) => {
+                scannerStatus.innerText = "Fehler beim Zugriff auf die Kamera.";
+                console.error(err);
+            });
+        });
+
+        closeScannerBtn.addEventListener('click', () => {
+            scannerContainer.classList.add('hidden');
+            if (codeReader) codeReader.reset();
+        });
+
+        async function onScanSuccess(decodedText) {
+            if (codeReader) codeReader.reset();
+            
+            scannerStatus.innerText = `Erkannt: ${decodedText}. Lade Daten...`;
+            const mengeValue = parseInt(itemQuantity.value) || 1;
+            itemQuantity.value = '1'; 
+
+            scannerContainer.classList.add('hidden');
+            loadingEl.classList.remove('hidden');
+
+            try {
+                const res = await fetch(`${API_URL}/scan/${currentListId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ barcode: decodedText, menge: mengeValue })
+                });
+                const data = await res.json();
+                
+                if (data.is_unknown) {
+                    const customName = prompt(`Das Produkt mit dem Barcode ${decodedText} wurde nicht gefunden.\nWie heißt dieses Produkt? (Wird dauerhaft in deinem System gespeichert)`);
+                    if (customName && customName.trim()) {
+                        await fetch(`${API_URL}/item/${data.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: customName.trim() })
+                        });
+                    }
+                }
+            } catch (err) {
+                alert("Fehler beim Verarbeiten des Barcodes.");
+            } finally {
+                loadingEl.classList.add('hidden');
+                loadList(); 
+            }
+        }
+
+        // --- INFO MODAL LOGIK ---
+        function showInfo(id) {
+            const item = currentItems.find(i => i.id === id);
+            if (!item) return;
+
+            modalTitle.innerText = item.name;
+
+            if (item.image_url) {
+                modalImg.src = item.image_url;
+                modalImg.classList.remove('hidden');
+                modalNoImg.classList.add('hidden');
+            } else {
+                modalImg.classList.add('hidden');
+                modalNoImg.classList.remove('hidden');
+            }
+
+            // Hersteller und Marke anzeigen
+            const companyInfo = document.getElementById('modal-company-info');
+            const brandEl = document.getElementById('modal-brand');
+            const manufacturerEl = document.getElementById('modal-manufacturer');
+
+            if (item.brand || item.manufacturer) {
+                brandEl.innerText = item.brand || 'Unbekannt';
+                manufacturerEl.innerText = item.manufacturer || 'Unbekannt';
+                companyInfo.classList.remove('hidden');
+            } else {
+                companyInfo.classList.add('hidden');
+            }
+
+            const nut = item.nutriments || {};
+            document.getElementById('nut-energy').innerText = nut.energy ? `${nut.energy} kcal` : '-';
+            document.getElementById('nut-fat').innerText = nut.fat ? `${nut.fat} g` : '-';
+            document.getElementById('nut-carbs').innerText = nut.carbohydrates ? `${nut.carbohydrates} g` : '-';
+            document.getElementById('nut-sugar').innerText = nut.sugar ? `${nut.sugar} g` : '-';
+            document.getElementById('nut-protein').innerText = nut.proteins ? `${nut.proteins} g` : '-';
+            document.getElementById('nut-salt').innerText = nut.salt ? `${nut.salt} g` : '-';
+
+            const ingredientsContainer = document.getElementById('modal-ingredients-container');
+            const ingredientsText = document.getElementById('modal-ingredients-text');
+            
+            if (item.ingredients) {
+                ingredientsText.innerText = item.ingredients;
+                ingredientsContainer.classList.remove('hidden');
+                ingredientsContainer.removeAttribute('open');
+            } else {
+                ingredientsContainer.classList.add('hidden');
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        closeModalBtn.addEventListener('click', () => modal.classList.add('hidden'));
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.classList.add('hidden');
+        });
+
+        // App starten
+        loadAllLists();
+    </script>
+</body>
+</html>
